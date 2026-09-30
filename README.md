@@ -50,7 +50,7 @@ Local dev alternative: `docker compose up -d postgres rabbitmq elasticsearch`, t
 
 ## Project structure
 
-```
+```text
 backend/app/{api,core,models,schemas,services,tasks,main.py,seed.py}
 backend/{Dockerfile,celery_app.py,requirements.txt,tests/}
 frontend/src/{components,views,router,services}
