@@ -1,68 +1,66 @@
 # E-Commerce Order Management & Search Service
 
-Dual-writing order service: FastAPI + PostgreSQL (source of truth), RabbitMQ + Celery background sync, Elasticsearch search index, Vue.js storefront + admin.
+Order management backend with background search indexing and a Vue 3 storefront + admin UI.
 
-## Architecture (Option A only)
-
-```
-Vue.js → FastAPI → PostgreSQL → RabbitMQ → Celery → PostgreSQL (re-read) → Elasticsearch
-                      ↑ canonical                     ↑ search-optimized copies only
-Admin search: Vue.js → FastAPI → Elasticsearch
-Order details: Vue.js → FastAPI → PostgreSQL
-```
-
-PostgreSQL commits happen **before** any sync task is published. ES failures never roll back PG; Celery retries with exponential backoff. ES doc id = PG order id (idempotent upserts).
+**PostgreSQL is the source of truth. Elasticsearch is a search index only.**
 
 ## Tech stack
 
-Backend: Python, FastAPI, SQLAlchemy, PostgreSQL, Pydantic · Messaging: RabbitMQ + Celery · Search: Elasticsearch · Frontend: Vue 3 + Vite + Vue Router.
+FastAPI · SQLAlchemy · Pydantic · PostgreSQL · RabbitMQ · Celery · Elasticsearch · Nginx · Vue 3 + Vite
+
+## Architecture
+
+```
+Vue 3 → Nginx → FastAPI → PostgreSQL
+                         ↓
+                     RabbitMQ → Celery → Elasticsearch
+```
+
+Orders commit to PostgreSQL first, then a sync task is published to RabbitMQ. The Celery worker re-reads the latest order from PostgreSQL and upserts it into Elasticsearch (`_id` = PG order id, so repeats never duplicate). ES failures never roll back PostgreSQL; the worker retries with exponential backoff. Order details are served from PostgreSQL, admin search from Elasticsearch.
+
+## Services (`docker-compose.yml`)
+
+| Service | Image / build | Host port |
+|---|---|---|
+| `nginx` | built (`nginx/Dockerfile`: Vue build + reverse proxy) | `80` |
+| `api` | built (`backend/Dockerfile`, uvicorn) | `8001` → container `8000` |
+| `celery-worker` | same backend image, `order_sync` queue | — |
+| `postgres` | `postgres:16-alpine` | `5434` → `5432` |
+| `rabbitmq` | `rabbitmq:3-management-alpine` | `5672`, `15672` |
+| `elasticsearch` | `elasticsearch:8.11.0` (single node) | `9200` |
+
+## Run with Docker Compose
+
+```powershell
+Copy-Item .env.example .env          # first time only
+docker compose up -d --build
+cd backend; python -m app.seed       # demo users + products
+```
+
+Stop: `docker compose down` (add `-v` to also drop `pgdata`/`esdata`).
+
+Local dev alternative: `docker compose up -d postgres rabbitmq elasticsearch`, then run the API (`cd backend; uvicorn app.main:app --reload --port 8001`), worker (`celery -A celery_app.celery worker --pool=solo --loglevel=info -Q order_sync`) and frontend (`cd frontend; npm install; npm run dev`) yourself.
+
+## URLs
+
+- App: http://localhost (via Nginx) · API direct: http://localhost:8001
+- Swagger: http://localhost/docs · Health: http://localhost/api/health
+- Search: http://localhost/api/search/orders?q=harsh
+- RabbitMQ UI: http://localhost:15672 (guest/guest) · Elasticsearch: http://localhost:9200
 
 ## Project structure
 
 ```
 backend/app/{api,core,models,schemas,services,tasks,main.py,seed.py}
-backend/{celery_app.py,requirements.txt,tests/}
+backend/{Dockerfile,celery_app.py,requirements.txt,tests/}
 frontend/src/{components,views,router,services}
-docker-compose.yml · .env.example · README.md
+nginx/{Dockerfile,nginx.conf}
+docker-compose.yml · .env.example
 ```
-
-## Prerequisites
-
-Docker + Docker Compose, Python 3.11+, Node 18+.
-
-## Setup
-
-```powershell
-docker compose up -d                      # postgres :5434, rabbitmq :5672/:15672, es :9200
-cd backend
-pip install -r requirements.txt
-python -m app.seed                         # demo users + products
-```
-
-## Run
-
-```powershell
-# terminal 1 — API (port 8001; 8000 is commonly taken by other local apps)
-cd backend; uvicorn app.main:app --reload --port 8001
-
-# terminal 2 — Celery worker (RabbitMQ broker, order_sync queue; --pool=solo on Windows)
-cd backend; celery -A celery_app.celery worker --pool=solo --loglevel=info -Q order_sync
-
-# terminal 3 — frontend
-cd frontend; npm install; npm run dev      # http://localhost:5173
-```
-
-RabbitMQ UI: http://localhost:15672 (guest/guest). ES: http://localhost:9200.
-
-## Environment variables
-
-See `.env.example`: `DATABASE_URL`, `RABBITMQ_URL`, `CELERY_BROKER_URL`, `ELASTICSEARCH_URL`, `ELASTICSEARCH_INDEX`.
 
 ## Tests
 
 ```powershell
-cd backend; python -m pytest tests -q
+cd backend; python -m pytest tests -q   # mocked infra: PG writes, sync publish, ES upsert/idempotency/retry, search
 cd frontend; npm run build
 ```
-
-Covers: product/order creation, PG persistence, sync publish, ES upsert + idempotency, ES-timeout retry (PG intact), status update propagation, ES search, validation errors, end-to-end PG → broker → worker → ES → search.

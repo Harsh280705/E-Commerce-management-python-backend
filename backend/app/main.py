@@ -26,7 +26,14 @@ app = FastAPI(title="E-Commerce Order Management API", version="1.0.0", lifespan
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
+    allow_origins=[
+        # Local Vite dev server.
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+        # Nginx reverse proxy (docker compose: host port 80).
+        "http://localhost",
+        "http://127.0.0.1",
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

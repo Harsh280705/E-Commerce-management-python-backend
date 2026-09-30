@@ -1,7 +1,10 @@
 import axios from 'axios'
 
+// Same-origin by default: works behind the Vite dev proxy (local) and the
+// Nginx reverse proxy (Docker, port 80). Set VITE_API_URL only to point the
+// SPA at a remote/direct FastAPI URL (e.g. http://localhost:8001).
 const api = axios.create({
-  baseURL: import.meta.env.VITE_API_URL || 'http://localhost:8001',
+  baseURL: import.meta.env.VITE_API_URL || '',
   timeout: 15000
 })
 
